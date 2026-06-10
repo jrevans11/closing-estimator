@@ -258,7 +258,7 @@ export default function App() {
   const uploadFile = async (file) => {
     const formData = new FormData();
     formData.append("file", file, file.name);
-    formData.append("purpose", "assistants");
+    formData.append("purpose", "user_data");
     const res = await fetch(PROXY + "/files", {
       method: "POST",
       body: formData,
