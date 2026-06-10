@@ -244,6 +244,13 @@ export default function App() {
   const [error, setError] = useState(null);
   const [step, setStep] = useState("upload");
 
+  const toBase64 = (file) =>
+    new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(",")[1]);
+      r.onerror = () => rej(new Error("File read failed"));
+      r.readAsDataURL(file);
+    });
 
   const LOAD_MSGS = [
     "Reading inspection report...",
@@ -252,21 +259,6 @@ export default function App() {
     "Writing scope descriptions...",
     "Building your estimate...",
   ];
-
-  const PROXY = "https://occ-estimator-proxy.jason-ca3.workers.dev";
-
-  const uploadFile = async (file) => {
-    const formData = new FormData();
-    formData.append("file", file, file.name);
-    formData.append("purpose", "user_data");
-    const res = await fetch(PROXY + "/files", {
-      method: "POST",
-      body: formData,
-    });
-    const data = await res.json();
-    if (data.error) throw new Error("File upload failed: " + data.error.message);
-    return data.id;
-  };
 
   const generate = async () => {
     if (!inspFile || !addFile) return;
@@ -281,11 +273,12 @@ export default function App() {
     }, 2800);
 
     try {
-      setLoadMsg("Uploading inspection report...");
-      const inspId = await uploadFile(inspFile); console.log("inspId:", inspId);
-      setLoadMsg("Uploading repair addendum...");
-      const addId = await uploadFile(addFile);
-      setLoadMsg("Analyzing documents...");
+      const [inspB64, addB64] = await Promise.all([
+        toBase64(inspFile),
+        toBase64(addFile),
+      ]);
+
+      const apiKey = process.env.REACT_APP_ANTHROPIC_KEY || "";
 
       const extra = wufoo.trim()
         ? "\n\nAdditional context from Wufoo inquiry email:\n" + wufoo.trim()
@@ -300,11 +293,16 @@ export default function App() {
         extra +
         "\n\nRespond with ONLY the raw JSON object. No markdown, no explanation.";
 
-      const res = await fetch(PROXY + "/messages", {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "prompt-caching-2024-07-31",
+        },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 4000,
           system: SYSTEM_PROMPT,
           messages: [
@@ -313,11 +311,11 @@ export default function App() {
               content: [
                 {
                   type: "document",
-                  source: { type: "file", file_id: inspId },
+                  source: { type: "base64", media_type: "application/pdf", data: inspB64 },
                 },
                 {
                   type: "document",
-                  source: { type: "file", file_id: addId },
+                  source: { type: "base64", media_type: "application/pdf", data: addB64 },
                 },
                 { type: "text", text: userText },
               ],
@@ -333,11 +331,6 @@ export default function App() {
       const match = raw.match(/\{[\s\S]*\}/);
       if (!match) throw new Error("No JSON found in response.");
       const parsed = JSON.parse(match[0]);
-
-      // Clean up uploaded files
-      await fetch(PROXY + "/files/" + inspId, { method: "DELETE" }).catch(() => {});
-      await fetch(PROXY + "/files/" + addId, { method: "DELETE" }).catch(() => {});
-
       setEstimate(parsed);
       setStep("preview");
     } catch (err) {
