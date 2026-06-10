@@ -244,12 +244,6 @@ export default function App() {
   const [error, setError] = useState(null);
   const [step, setStep] = useState("upload");
 
-  const toBase64 = (file) =>
-    new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res(r.result.split(",")[1]);
-      r.onerror = () => rej(new Error("File read failed"));
-      r.readAsDataURL(file);
     });
 
   const LOAD_MSGS = [
