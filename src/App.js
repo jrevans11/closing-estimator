@@ -244,7 +244,6 @@ export default function App() {
   const [error, setError] = useState(null);
   const [step, setStep] = useState("upload");
 
-    });
 
   const LOAD_MSGS = [
     "Reading inspection report...",
