@@ -293,14 +293,9 @@ export default function App() {
         extra +
         "\n\nRespond with ONLY the raw JSON object. No markdown, no explanation.";
 
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/proxy", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-beta": "prompt-caching-2024-07-31",
-        },
+       headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
           max_tokens: 4000,
