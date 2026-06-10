@@ -293,7 +293,7 @@ export default function App() {
         extra +
         "\n\nRespond with ONLY the raw JSON object. No markdown, no explanation.";
 
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("https://occ-estimator-proxy.jason-ca3.workers.dev/messages", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
