@@ -282,7 +282,7 @@ export default function App() {
 
     try {
       setLoadMsg("Uploading inspection report...");
-      const inspId = await uploadFile(inspFile);
+      const inspId = await uploadFile(inspFile); console.log("inspId:", inspId);
       setLoadMsg("Uploading repair addendum...");
       const addId = await uploadFile(addFile);
       setLoadMsg("Analyzing documents...");
