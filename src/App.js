@@ -278,7 +278,7 @@ export default function App() {
         toBase64(addFile),
       ]);
 
-      const apiKey = process.env.REACT_APP_ANTHROPIC_KEY || "";
+      
 
       const extra = wufoo.trim()
         ? "\n\nAdditional context from Wufoo inquiry email:\n" + wufoo.trim()
