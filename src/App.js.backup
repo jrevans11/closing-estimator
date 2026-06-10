@@ -1,9 +1,4 @@
-import React, { useState, useRef } from "react";
-import * as pdfjsLib from "pdfjs-dist";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
-
-const PROXY = "https://occ-estimator-proxy.jason-ca3.workers.dev";
+import { useState, useRef } from "react";
 
 const SYSTEM_PROMPT = `You are an expert estimator for Owners Choice Construction LLC, a residential repair contractor in Greenville/Upstate SC. You create closing repair estimates from home inspection reports and repair addendums.
 
@@ -86,19 +81,6 @@ OUTPUT FORMAT: Respond with ONLY a valid JSON object. No markdown fences, no exp
   "total": 0000.00,
   "skipped_items": ["item description - reason it was excluded"]
 }`;
-
-async function extractTextFromPDF(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = "";
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    const pageText = content.items.map((item) => item.str).join(" ");
-    fullText += pageText + "\n";
-  }
-  return fullText;
-}
 
 function fmt(price) {
   if (price === 0) return "$0.00";
@@ -205,7 +187,9 @@ function UploadBox({ label, file, onFile }) {
         borderRadius: "var(--border-radius-lg)",
         padding: "1.25rem",
         cursor: "pointer",
-        background: file ? "var(--color-background-success)" : "var(--color-background-secondary)",
+        background: file
+          ? "var(--color-background-success)"
+          : "var(--color-background-secondary)",
         minHeight: 90,
         display: "flex",
         flexDirection: "column",
@@ -226,14 +210,20 @@ function UploadBox({ label, file, onFile }) {
       {file ? (
         <>
           <i className="ti ti-check" style={{ fontSize: 22, color: "var(--color-text-success)" }} />
-          <span style={{ fontSize: 13, color: "var(--color-text-success)", fontWeight: 500 }}>{file.name}</span>
+          <span style={{ fontSize: 13, color: "var(--color-text-success)", fontWeight: 500 }}>
+            {file.name}
+          </span>
           <span style={{ fontSize: 11, color: "var(--color-text-success)" }}>Click to replace</span>
         </>
       ) : (
         <>
           <i className="ti ti-upload" style={{ fontSize: 22, color: "var(--color-text-secondary)" }} />
-          <span style={{ fontSize: 14, color: "var(--color-text-primary)", fontWeight: 500 }}>{label}</span>
-          <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Click or drag and drop PDF</span>
+          <span style={{ fontSize: 14, color: "var(--color-text-primary)", fontWeight: 500 }}>
+            {label}
+          </span>
+          <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+            Click or drag and drop PDF
+          </span>
         </>
       )}
     </div>
@@ -253,6 +243,14 @@ export default function App() {
   const [estimate, setEstimate] = useState(null);
   const [error, setError] = useState(null);
   const [step, setStep] = useState("upload");
+
+  const toBase64 = (file) =>
+    new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(",")[1]);
+      r.onerror = () => rej(new Error("File read failed"));
+      r.readAsDataURL(file);
+    });
 
   const LOAD_MSGS = [
     "Reading inspection report...",
@@ -275,37 +273,54 @@ export default function App() {
     }, 2800);
 
     try {
-      setLoadMsg("Extracting text from inspection report...");
-      const inspText = await extractTextFromPDF(inspFile);
-      setLoadMsg("Extracting text from repair addendum...");
-      const addText = await extractTextFromPDF(addFile);
-      setLoadMsg("Analyzing documents and building estimate...");
+      const [inspB64, addB64] = await Promise.all([
+        toBase64(inspFile),
+        toBase64(addFile),
+      ]);
+
+      const apiKey = process.env.REACT_APP_ANTHROPIC_KEY || "";
 
       const extra = wufoo.trim()
         ? "\n\nAdditional context from Wufoo inquiry email:\n" + wufoo.trim()
         : "";
 
       const userText =
-        "Below is the text extracted from the home inspection report and repair addendum. Generate a closing repairs estimate for Owners Choice Construction.\n\n" +
-        "Only include items within a general contractor scope. Cross-reference the addendum items with the inspection report details to write accurate scope descriptions.\n\n" +
+        "Using the attached home inspection report and repair addendum, generate a closing repairs estimate for Owners Choice Construction.\n\n" +
+        "Only include items within a general contractor scope. Cross-reference the addendum with the inspection report to write accurate scope descriptions.\n\n" +
         (clientName ? "Client name: " + clientName + "\n" : "Extract client name from the documents.\n") +
         (clientPhone ? "Client phone: " + clientPhone + "\n" : "") +
         (clientEmail ? "Client email: " + clientEmail + "\n" : "") +
         extra +
-        "\n\n=== HOME INSPECTION REPORT ===\n" +
-        inspText.slice(0, 60000) +
-        "\n\n=== REPAIR ADDENDUM ===\n" +
-        addText.slice(0, 10000) +
         "\n\nRespond with ONLY the raw JSON object. No markdown, no explanation.";
 
-      const res = await fetch(PROXY + "/messages", {
+      const res = await fetch("https://occ-estimator-proxy.jason-ca3.workers.dev/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "prompt-caching-2024-07-31",
+        },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
           max_tokens: 4000,
           system: SYSTEM_PROMPT,
-          messages: [{ role: "user", content: userText }],
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "document",
+                  source: { type: "base64", media_type: "application/pdf", data: inspB64 },
+                },
+                {
+                  type: "document",
+                  source: { type: "base64", media_type: "application/pdf", data: addB64 },
+                },
+                { type: "text", text: userText },
+              ],
+            },
+          ],
         }),
       });
 
@@ -384,7 +399,9 @@ export default function App() {
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Home Inspection Report</div>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>
+                Home Inspection Report
+              </div>
               <UploadBox label="Upload Inspection Report" file={inspFile} onFile={setInspFile} />
             </div>
             <div>
@@ -393,11 +410,26 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-lg)", padding: "14px 16px", marginBottom: 12, border: "0.5px solid var(--color-border-tertiary)" }}>
+          <div
+            style={{
+              background: "var(--color-background-secondary)",
+              borderRadius: "var(--border-radius-lg)",
+              padding: "14px 16px",
+              marginBottom: 12,
+              border: "0.5px solid var(--color-border-tertiary)",
+            }}
+          >
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 10 }}>
               <i className="ti ti-user" style={{ marginRight: 6 }} />
               Client Info
-              <span style={{ fontSize: 12, color: "var(--color-text-secondary)", fontWeight: 400, marginLeft: 8 }}>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: "var(--color-text-secondary)",
+                  fontWeight: 400,
+                  marginLeft: 8,
+                }}
+              >
                 optional — auto-detected from documents
               </span>
             </div>
@@ -408,37 +440,86 @@ export default function App() {
                 ["Email", clientEmail, setClientEmail],
               ].map(([label, val, setter]) => (
                 <div key={label}>
-                  <label style={{ fontSize: 12, color: "var(--color-text-secondary)", display: "block", marginBottom: 4 }}>{label}</label>
-                  <input type="text" value={val} onChange={(e) => setter(e.target.value)} placeholder={label} style={{ width: "100%", fontSize: 13, boxSizing: "border-box" }} />
+                  <label
+                    style={{
+                      fontSize: 12,
+                      color: "var(--color-text-secondary)",
+                      display: "block",
+                      marginBottom: 4,
+                    }}
+                  >
+                    {label}
+                  </label>
+                  <input
+                    type="text"
+                    value={val}
+                    onChange={(e) => setter(e.target.value)}
+                    placeholder={label}
+                    style={{ width: "100%", fontSize: 13, boxSizing: "border-box" }}
+                  />
                 </div>
               ))}
             </div>
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <button onClick={() => setShowWufoo(!showWufoo)} style={{ fontSize: 13, padding: "6px 12px" }}>
+            <button
+              onClick={() => setShowWufoo(!showWufoo)}
+              style={{ fontSize: 13, padding: "6px 12px" }}
+            >
               <i className="ti ti-mail" style={{ marginRight: 6 }} />
               {showWufoo ? "Hide" : "Paste Wufoo email"} (optional)
-              <i className={"ti ti-chevron-" + (showWufoo ? "up" : "down")} style={{ marginLeft: 6 }} />
+              <i
+                className={"ti ti-chevron-" + (showWufoo ? "up" : "down")}
+                style={{ marginLeft: 6 }}
+              />
             </button>
             {showWufoo && (
               <div style={{ marginTop: 10 }}>
-                <label style={{ fontSize: 12, color: "var(--color-text-secondary)", display: "block", marginBottom: 6 }}>
-                  Paste the Wufoo inquiry email body here. Client info and property address will be extracted automatically.
+                <label
+                  style={{
+                    fontSize: 12,
+                    color: "var(--color-text-secondary)",
+                    display: "block",
+                    marginBottom: 6,
+                  }}
+                >
+                  Paste the Wufoo inquiry email body here. Client info and property address will be
+                  extracted automatically.
                 </label>
                 <textarea
                   value={wufoo}
                   onChange={(e) => setWufoo(e.target.value)}
                   placeholder="Paste Wufoo email content here..."
                   rows={6}
-                  style={{ width: "100%", fontSize: 13, fontFamily: "var(--font-sans)", boxSizing: "border-box", resize: "vertical", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", padding: "8px 10px", background: "var(--color-background-secondary)", color: "var(--color-text-primary)" }}
+                  style={{
+                    width: "100%",
+                    fontSize: 13,
+                    fontFamily: "var(--font-sans)",
+                    boxSizing: "border-box",
+                    resize: "vertical",
+                    borderRadius: "var(--border-radius-md)",
+                    border: "0.5px solid var(--color-border-secondary)",
+                    padding: "8px 10px",
+                    background: "var(--color-background-secondary)",
+                    color: "var(--color-text-primary)",
+                  }}
                 />
               </div>
             )}
           </div>
 
           {error && (
-            <div style={{ padding: "10px 14px", background: "var(--color-background-danger)", borderRadius: "var(--border-radius-md)", fontSize: 13, color: "var(--color-text-danger)", marginBottom: 12 }}>
+            <div
+              style={{
+                padding: "10px 14px",
+                background: "var(--color-background-danger)",
+                borderRadius: "var(--border-radius-md)",
+                fontSize: 13,
+                color: "var(--color-text-danger)",
+                marginBottom: 12,
+              }}
+            >
               <i className="ti ti-alert-circle" style={{ marginRight: 6 }} />
               {error}
             </div>
@@ -447,15 +528,32 @@ export default function App() {
           <button
             onClick={generate}
             disabled={!inspFile || !addFile || loading}
-            style={{ width: "100%", padding: "11px 0", fontSize: 14, fontWeight: 500, cursor: inspFile && addFile && !loading ? "pointer" : "not-allowed", opacity: inspFile && addFile && !loading ? 1 : 0.5 }}
+            style={{
+              width: "100%",
+              padding: "11px 0",
+              fontSize: 14,
+              fontWeight: 500,
+              cursor: inspFile && addFile && !loading ? "pointer" : "not-allowed",
+              opacity: inspFile && addFile && !loading ? 1 : 0.5,
+            }}
           >
             {loading ? (
               <span>
-                <i className="ti ti-loader-2" style={{ marginRight: 6, display: "inline-block", animation: "spin 1s linear infinite" }} />
+                <i
+                  className="ti ti-loader-2"
+                  style={{
+                    marginRight: 6,
+                    display: "inline-block",
+                    animation: "spin 1s linear infinite",
+                  }}
+                />
                 {loadMsg}
               </span>
             ) : (
-              <span><i className="ti ti-sparkles" style={{ marginRight: 6 }} />Generate Estimate</span>
+              <span>
+                <i className="ti ti-sparkles" style={{ marginRight: 6 }} />
+                Generate Estimate
+              </span>
             )}
           </button>
           <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
@@ -464,58 +562,179 @@ export default function App() {
 
       {step === "preview" && estimate && (
         <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 16,
+            }}
+          >
             <button onClick={reset} style={{ fontSize: 13, padding: "7px 14px" }}>
-              <i className="ti ti-arrow-left" style={{ marginRight: 4 }} />New Estimate
+              <i className="ti ti-arrow-left" style={{ marginRight: 4 }} />
+              New Estimate
             </button>
-            <button onClick={printEstimate} style={{ fontSize: 13, padding: "7px 18px", fontWeight: 500 }}>
-              <i className="ti ti-printer" style={{ marginRight: 6 }} />Print / Save as PDF
+            <button
+              onClick={printEstimate}
+              style={{ fontSize: 13, padding: "7px 18px", fontWeight: 500 }}
+            >
+              <i className="ti ti-printer" style={{ marginRight: 6 }} />
+              Print / Save as PDF
             </button>
           </div>
 
-          <div style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "20px 24px", fontSize: 13 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", paddingBottom: 14, borderBottom: "0.5px solid var(--color-border-tertiary)", marginBottom: 14 }}>
+          <div
+            style={{
+              background: "var(--color-background-primary)",
+              border: "0.5px solid var(--color-border-tertiary)",
+              borderRadius: "var(--border-radius-lg)",
+              padding: "20px 24px",
+              fontSize: 13,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                paddingBottom: 14,
+                borderBottom: "0.5px solid var(--color-border-tertiary)",
+                marginBottom: 14,
+              }}
+            >
               <div style={{ fontSize: 18, fontWeight: 500 }}>Closing Repairs Estimate</div>
-              <div style={{ fontSize: 12, color: "var(--color-text-secondary)", textAlign: "right" }}>
+              <div
+                style={{ fontSize: 12, color: "var(--color-text-secondary)", textAlign: "right" }}
+              >
                 <div>Issue Date {fmtDate(today)}</div>
                 <div>Expires {fmtDate(new Date(today.getTime() + 14 * 86400000))}</div>
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, paddingBottom: 14, borderBottom: "0.5px solid var(--color-border-tertiary)", marginBottom: 14 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 16,
+                paddingBottom: 14,
+                borderBottom: "0.5px solid var(--color-border-tertiary)",
+                marginBottom: 14,
+              }}
+            >
               <div>
-                <div style={{ fontSize: 11, color: "var(--color-text-secondary)", fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 }}>Prepared By</div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--color-text-secondary)",
+                    fontWeight: 500,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                    marginBottom: 3,
+                  }}
+                >
+                  Prepared By
+                </div>
                 <div style={{ fontWeight: 500 }}>Jason Evans</div>
                 <div>Owners Choice Construction</div>
                 <div>(864) 252-4999</div>
-                <div style={{ color: "var(--color-text-info)" }}>jason@ownerschoiceconstruction.com</div>
+                <div style={{ color: "var(--color-text-info)" }}>
+                  jason@ownerschoiceconstruction.com
+                </div>
                 <div>3122 Wade Hampton Blvd, Taylors, SC 29687</div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: "var(--color-text-secondary)", fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 }}>Prepared For</div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--color-text-secondary)",
+                    fontWeight: 500,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                    marginBottom: 3,
+                  }}
+                >
+                  Prepared For
+                </div>
                 {resolved.name && <div style={{ fontWeight: 500 }}>{resolved.name}</div>}
                 <div>{estimate.property_address}</div>
                 {resolved.phone && <div>{resolved.phone}</div>}
-                {resolved.email && <div style={{ color: "var(--color-text-info)" }}>{resolved.email}</div>}
+                {resolved.email && (
+                  <div style={{ color: "var(--color-text-info)" }}>{resolved.email}</div>
+                )}
               </div>
             </div>
 
-            <div style={{ fontSize: 11, color: "var(--color-text-secondary)", fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Closing Repairs Estimate Details</div>
-            <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 14 }}>{estimate.property_address}</div>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--color-text-secondary)",
+                fontWeight: 500,
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+                marginBottom: 2,
+              }}
+            >
+              Closing Repairs Estimate Details
+            </div>
+            <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 14 }}>
+              {estimate.property_address}
+            </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--color-border-primary)", marginBottom: 2 }}>
-              <span style={{ fontSize: 11, color: "var(--color-text-secondary)", fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em" }}>Description</span>
-              <span style={{ fontSize: 11, color: "var(--color-text-secondary)", fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em" }}>Total</span>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                padding: "5px 0",
+                borderBottom: "1px solid var(--color-border-primary)",
+                marginBottom: 2,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "var(--color-text-secondary)",
+                  fontWeight: 500,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                Description
+              </span>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "var(--color-text-secondary)",
+                  fontWeight: 500,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                Total
+              </span>
             </div>
 
             {estimate.line_items.map((item, i) => (
-              <div key={i} style={{ padding: "10px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+              <div
+                key={i}
+                style={{
+                  padding: "10px 0",
+                  borderBottom: "0.5px solid var(--color-border-tertiary)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    alignItems: "flex-start",
+                  }}
+                >
                   <span style={{ fontWeight: 500 }}>{item.title}</span>
                   <span style={{ fontWeight: 500, whiteSpace: "nowrap" }}>{fmt(item.price)}</span>
                 </div>
                 {item.description && (
-                  <div style={{ marginTop: 3, color: "var(--color-text-secondary)", fontSize: 12 }}>
+                  <div
+                    style={{ marginTop: 3, color: "var(--color-text-secondary)", fontSize: 12 }}
+                  >
                     {item.description.split("\n").map((line, j) =>
                       line.startsWith("-") ? (
                         <div key={j} style={{ display: "flex", gap: 6, marginTop: 2 }}>
@@ -528,24 +747,65 @@ export default function App() {
                     )}
                   </div>
                 )}
-                {item.notes && <div style={{ marginTop: 5, fontSize: 12, color: "var(--color-text-secondary)", fontStyle: "italic" }}>{item.notes}</div>}
+                {item.notes && (
+                  <div
+                    style={{
+                      marginTop: 5,
+                      fontSize: 12,
+                      color: "var(--color-text-secondary)",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    {item.notes}
+                  </div>
+                )}
               </div>
             ))}
 
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 0", borderTop: "1px solid var(--color-border-primary)", fontWeight: 500, fontSize: 14, marginTop: 2 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                padding: "12px 0",
+                borderTop: "1px solid var(--color-border-primary)",
+                fontWeight: 500,
+                fontSize: 14,
+                marginTop: 2,
+              }}
+            >
               <span>TOTAL</span>
               <span>{fmt(estimate.total)}</span>
             </div>
           </div>
 
           {estimate.skipped_items && estimate.skipped_items.length > 0 && (
-            <div style={{ marginTop: 12, padding: "12px 14px", background: "var(--color-background-warning)", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-warning)" }}>
-              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-warning)", marginBottom: 6 }}>
+            <div
+              style={{
+                marginTop: 12,
+                padding: "12px 14px",
+                background: "var(--color-background-warning)",
+                borderRadius: "var(--border-radius-md)",
+                border: "0.5px solid var(--color-border-warning)",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: "var(--color-text-warning)",
+                  marginBottom: 6,
+                }}
+              >
                 <i className="ti ti-info-circle" style={{ marginRight: 4 }} />
                 Items excluded from estimate (outside scope or not applicable):
               </div>
               {estimate.skipped_items.map((s, i) => (
-                <div key={i} style={{ fontSize: 12, color: "var(--color-text-warning)", marginTop: 2 }}>• {s}</div>
+                <div
+                  key={i}
+                  style={{ fontSize: 12, color: "var(--color-text-warning)", marginTop: 2 }}
+                >
+                  • {s}
+                </div>
               ))}
             </div>
           )}
