@@ -260,6 +260,21 @@ export default function App() {
     "Building your estimate...",
   ];
 
+  const PROXY = "https://occ-estimator-proxy.jason-ca3.workers.dev";
+
+  const uploadFile = async (file) => {
+    const formData = new FormData();
+    formData.append("file", file, file.name);
+    formData.append("purpose", "assistants");
+    const res = await fetch(PROXY + "/files", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    if (data.error) throw new Error("File upload failed: " + data.error.message);
+    return data.id;
+  };
+
   const generate = async () => {
     if (!inspFile || !addFile) return;
     setLoading(true);
@@ -273,12 +288,11 @@ export default function App() {
     }, 2800);
 
     try {
-      const [inspB64, addB64] = await Promise.all([
-        toBase64(inspFile),
-        toBase64(addFile),
-      ]);
-
-      
+      setLoadMsg("Uploading inspection report...");
+      const inspId = await uploadFile(inspFile);
+      setLoadMsg("Uploading repair addendum...");
+      const addId = await uploadFile(addFile);
+      setLoadMsg("Analyzing documents...");
 
       const extra = wufoo.trim()
         ? "\n\nAdditional context from Wufoo inquiry email:\n" + wufoo.trim()
@@ -293,9 +307,9 @@ export default function App() {
         extra +
         "\n\nRespond with ONLY the raw JSON object. No markdown, no explanation.";
 
-      const res = await fetch("https://occ-estimator-proxy.jason-ca3.workers.dev/", {
+      const res = await fetch(PROXY + "/messages", {
         method: "POST",
-       headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
           max_tokens: 4000,
@@ -306,11 +320,11 @@ export default function App() {
               content: [
                 {
                   type: "document",
-                  source: { type: "base64", media_type: "application/pdf", data: inspB64 },
+                  source: { type: "file", file_id: inspId },
                 },
                 {
                   type: "document",
-                  source: { type: "base64", media_type: "application/pdf", data: addB64 },
+                  source: { type: "file", file_id: addId },
                 },
                 { type: "text", text: userText },
               ],
@@ -326,6 +340,11 @@ export default function App() {
       const match = raw.match(/\{[\s\S]*\}/);
       if (!match) throw new Error("No JSON found in response.");
       const parsed = JSON.parse(match[0]);
+
+      // Clean up uploaded files
+      await fetch(PROXY + "/files/" + inspId, { method: "DELETE" }).catch(() => {});
+      await fetch(PROXY + "/files/" + addId, { method: "DELETE" }).catch(() => {});
+
       setEstimate(parsed);
       setStep("preview");
     } catch (err) {
